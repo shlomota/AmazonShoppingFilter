@@ -1,4 +1,4 @@
-# Amazon Shoppin Filter
+# Amazon Shopping Filter
 This script filters Amazon search results using natural language criteria with OpenAI GPT.
 
 ## Features
