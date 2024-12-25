@@ -35,7 +35,7 @@ def filter_products_with_llm(products, criteria):
 
     prompt = f"""
     You are a product filtering assistant. Your task is to evaluate the relevance of each product based on the user's criteria: "{criteria}".
-    For each product, carefully consider all details, including suitability for adults, type of sled (not tube), and any other criteria. 
+    For each product, carefully consider all details, even if they only hint at some criteria. 
 
     Only mark a product as 'relevant: true' if it satisfies **all criteria completely**. If there is any ambiguity or missing information about a criterion, mark the product as 'relevant: false'.
 
@@ -62,6 +62,7 @@ def filter_products_with_llm(products, criteria):
     Products:
     {[{'name': product['name']} for product in products[:10]]}
     """
+    #     {[{'name': product['name']} for product in products]} # use 10 items only for debug
 
     response = client.beta.chat.completions.parse(
         model="gpt-4o-2024-08-06",
