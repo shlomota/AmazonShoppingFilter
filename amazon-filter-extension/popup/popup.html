@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Amazon AI Filter Settings</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="container">
+    <div id="logo-container">
+      <img src="https://i.imgur.com/d2uMms8.png" alt="AI Filter Logo">
+      <h1>Amazon AI Filter</h1>
+    </div>
+    <div class="input-group">
+      <label for="apiKey">OpenAI API Key:</label>
+      <input type="text" id="apiKey" placeholder="Enter API key" />
+      <button id="saveKey">Save</button>
+    </div>
+    <div class="input-group">
+      <label for="enableExtension">Enable Extension:</label>
+      <input type="checkbox" id="enableExtension" />
+    </div>
+    <div id="statusMessage"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

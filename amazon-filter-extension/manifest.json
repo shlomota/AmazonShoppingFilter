@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon Product Filter",
+  "version": "1.0",
+  "description": "Filter Amazon search results dynamically using OpenAI.",
+  "permissions": ["scripting", "storage", "activeTab"],
+  "host_permissions": ["https://www.amazon.com/*"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "192": "icons/icon192.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.amazon.com/s*"],
+      "js": ["content.js"],
+      "run_at": "document_end",
+      "type": "module"
+    }
+  ]
+}
+
