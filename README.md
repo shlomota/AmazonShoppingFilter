@@ -1,5 +1,6 @@
 # Amazon Shopping Filter
 This script filters Amazon search results using natural language criteria with OpenAI GPT.
+See the Chrome extension here: [Amazon AI Shopper on Chrome Web Store](https://chrome.google.com/webstore/detail/amazon-ai-shopper/kgeiakeallceppnaejfhekeeebjfdadc)
 
 ## Features
 - Extract products from Amazon HTML search results.
