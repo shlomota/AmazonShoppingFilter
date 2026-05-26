@@ -1,0 +1,11 @@
+.DS_Store
+.idea/
+.venv/
+*.zip
+filtered_results.html
+Amazon.com*
+*_files/
+main2.py
+main3.py
+Screenshot*.png
+__pycache__/
