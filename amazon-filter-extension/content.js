@@ -187,7 +187,7 @@ function setupUI() {
   const header = document.createElement('div');
   header.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0073e6;border-radius:12px 12px 0 0;";
   const logo = document.createElement('img');
-  logo.src = "https://i.imgur.com/d2uMms8.png";
+  logo.src = chrome.runtime.getURL("icons/icon32.png");
   logo.alt = "";
   logo.style.cssText = "width:22px;height:22px;margin-right:8px;border-radius:4px;";
   const titleEl = document.createElement('span');
@@ -250,7 +250,7 @@ function setupUI() {
   const suggestionsRow = document.createElement('div');
   suggestionsRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
   const suggestionsLabel = document.createElement('span');
-  suggestionsLabel.textContent = "Suggest:";
+  suggestionsLabel.textContent = "Suggested:";
   suggestionsLabel.style.cssText = "font-size:12px;color:#888;white-space:nowrap;";
   const chipsContainer = document.createElement('div');
   chipsContainer.style.cssText = "display:flex;flex-wrap:wrap;gap:5px;flex:1;";

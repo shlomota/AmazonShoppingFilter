@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amazon AI Shopper",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Filter Amazon search results dynamically using OpenAI.",
   "permissions": ["storage"],
   "host_permissions": ["https://www.amazon.com/*"],
@@ -10,9 +10,22 @@
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
-      "192": "icons/icon192.png"
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
     }
   },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["https://www.amazon.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["https://www.amazon.com/s*"],
@@ -21,4 +34,3 @@
     }
   ]
 }
-
