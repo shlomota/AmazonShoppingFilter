@@ -19,11 +19,11 @@ def extract_products(html_file):
     results = soup.select("div.s-result-item[data-component-type='s-search-result']")
 
     for result in results:
-        title = result.select_one("h2 span")
+        title = result.select_one("h2[aria-label]")
 
         if title:
             product = {
-                "name": title.get_text(strip=True),
+                "name": title.get("aria-label", "").strip(),
                 "element": result  # Store the entire HTML element for filtering
             }
             products.append(product)
@@ -60,12 +60,11 @@ def filter_products_with_llm(products, criteria):
 
     Now, analyze the following products:
     Products:
-    {[{'name': product['name']} for product in products[:10]]}
+    {[{'name': product['name']} for product in products]}
     """
-    #     {[{'name': product['name']} for product in products]} # use 10 items only for debug
 
     response = client.beta.chat.completions.parse(
-        model="gpt-4o-2024-08-06",
+        model="gpt-5.4",
         messages=[
             {"role": "user", "content": prompt}
         ],
@@ -83,17 +82,43 @@ def generate_filtered_html(original_html_file, filtered_products, output_file):
 
     # Remove all items not in the filtered list
     for result in soup.select("div.s-result-item[data-component-type='s-search-result']"):
-        title = result.select_one("h2 span")
-        if title and title.get_text(strip=True) not in filtered_names:
+        title = result.select_one("h2[aria-label]")
+        if title and title.get("aria-label", "").strip() not in filtered_names:
             result.decompose()
+
+    for result in soup.select("div.a-carousel-card"):
+        result.decompose()
+
+    # Remove carousel sections (Trending now, etc.)
+    for carousel in soup.select("[data-component-type='s-searchgrid-carousel']"):
+        carousel.decompose()
+
+    # Remove noise sections by heading text
+    noise_patterns = [
+        "trending now", "picks from amazon influencers", "related searches", "need help",
+        "recently bought and rated", "seen on social media", "recommended based on",
+        "customers who viewed", "browsing history",
+    ]
+    for heading in soup.find_all(["h2", "h3"]):
+        text = heading.get_text(strip=True).lower()
+        if any(p in text for p in noise_patterns):
+            # Walk up to a substantial container to remove the whole section
+            container = heading
+            for _ in range(6):
+                parent = container.parent
+                if parent and parent.name in ("div", "section") and parent.get("class"):
+                    container = parent
+                else:
+                    break
+            container.decompose()
 
     with open(output_file, 'w', encoding='utf-8') as file:
         file.write(soup.prettify())
 
 if __name__ == "__main__":
-    html_file = "Amazon.com _ sled.html"
+    html_file = "Amazon.com _ nike running shoes.html"
     output_file = "filtered_results.html"
-    filter_criteria = "hard plastic and for adults"
+    filter_criteria = "men's running shoes"
 
     products = extract_products(html_file)
 

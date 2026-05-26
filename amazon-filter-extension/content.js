@@ -3,29 +3,70 @@ const DEFAULT_FILTER = "hard plastic and for adults";
 
 let OPENAI_API_KEY = null;
 let EXTENSION_ENABLED = true;
-let filterConditions = JSON.parse(localStorage.getItem('filterConditions')) || [];
+const _savedQuery = localStorage.getItem('filterQuery') || '';
+const _currentQuery = new URLSearchParams(window.location.search).get('k') || '';
+let filterConditions = (_currentQuery && _currentQuery !== _savedQuery)
+  ? (localStorage.setItem('filterConditions', '[]'), localStorage.setItem('filterQuery', _currentQuery), [])
+  : JSON.parse(localStorage.getItem('filterConditions')) || [];
 let productLimit = JSON.parse(localStorage.getItem('productLimit')) || Infinity;
 
-// Utility log function
 function log(message) {
   console.log(`[Amazon Filter Extension]: ${message}`);
 }
 
-// Fetch relevant products from OpenAI API
+function getSearchQuery() {
+  return new URLSearchParams(window.location.search).get('k') || '';
+}
+
+function queryPageProducts() {
+  const products = [];
+  document.querySelectorAll("div.s-result-item[data-component-type='s-search-result']").forEach((item) => {
+    const titleElement = item.querySelector("h2[aria-label]");
+    if (titleElement) {
+      products.push({ name: titleElement.getAttribute("aria-label").trim(), element: item });
+    }
+  });
+  return products;
+}
+
+async function generateSuggestions(productNames, searchQuery, apiKey) {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: "gpt-5.4",
+      messages: [{
+        role: "user",
+        content: `Search query: "${searchQuery}"\n\nProduct titles on page:\n${productNames.join('\n')}\n\nSuggest exactly 4 short filter options (max 4 words each) to help narrow these results. Rules:\n- Do NOT restate anything already in the search query\n- Only suggest a filter if a meaningful portion of results would be excluded by it (i.e. the results are actually divided on that dimension)\n- Prefer non-obvious dimensions: specific brand, subcategory, feature, material, age group, price tier — not generic terms the user already typed\n- Each suggestion should be a useful, standalone filter phrase\nReturn JSON.`,
+      }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "suggestions",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: { suggestions: { type: "array", items: { type: "string" } } },
+            required: ["suggestions"],
+            additionalProperties: false,
+          },
+        },
+      },
+    }),
+  });
+  const responseText = await response.text();
+  if (!response.ok) throw new Error(`API ${response.status}: ${responseText}`);
+  const data = JSON.parse(responseText);
+  return JSON.parse(data.choices[0].message.content).suggestions.slice(0, 4);
+}
+
 async function fetchRelevantProducts(products, filterCriteria, openaiApiKey) {
   log("Calling OpenAI API...");
 
   const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
   const productSchema = {
     type: "object",
-    properties: {
-      relevant: {
-        type: "array",
-        items: {
-          type: "boolean",
-        },
-      },
-    },
+    properties: { relevant: { type: "array", items: { type: "boolean" } } },
     required: ["relevant"],
     additionalProperties: false,
   };
@@ -37,7 +78,7 @@ async function fetchRelevantProducts(products, filterCriteria, openaiApiKey) {
     {
       role: "system",
       content: `You are a product filtering assistant. Your task is to evaluate the relevance of each product based on the user's criteria: "${filterCriteria}".
-For each product, carefully consider all details, even if they only hint at some criteria. 
+For each product, carefully consider all details, even if they only hint at some criteria.
 
 Only mark a product as 'relevant: true' if it satisfies **all criteria completely**. If there is any ambiguity or missing information about a criterion, mark the product as 'relevant: false'.
 
@@ -56,42 +97,27 @@ Criteria: "hard plastic and for adults"
 
 Example Output:
 {
-    "relevant": [
-        true,
-        false,
-        false,
-        true
-    ]
+    "relevant": [true, false, false, true]
 }
 
 Now, analyze the following products:
 Products:
 ${JSON.stringify(limitedProducts.map((p) => p.name), null, 2)}`,
     },
-    {
-      role: "user",
-      content: JSON.stringify(limitedProducts.map((p) => p.name)),
-    },
+    { role: "user", content: JSON.stringify(limitedProducts.map((p) => p.name)) },
   ];
 
   try {
     const startTime = performance.now();
     const response = await fetch(OPENAI_API_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openaiApiKey}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiApiKey}` },
       body: JSON.stringify({
-        model: "gpt-4o-2024-08-06",
-        messages: messages,
+        model: "gpt-5.4",
+        messages,
         response_format: {
           type: "json_schema",
-          json_schema: {
-            name: "product_filter",
-            strict: true,
-            schema: productSchema,
-          },
+          json_schema: { name: "product_filter", strict: true, schema: productSchema },
         },
       }),
     });
@@ -99,21 +125,12 @@ ${JSON.stringify(limitedProducts.map((p) => p.name), null, 2)}`,
     const responseText = await response.text();
     log(`Raw API response: ${responseText}`);
 
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} - ${responseText}`);
-    }
+    if (!response.ok) throw new Error(`API Error: ${response.status} - ${responseText}`);
 
     const result = JSON.parse(responseText);
-    log(`Parsed response: ${JSON.stringify(result)}`);
+    if (!result.choices || !result.choices[0]) throw new Error("Invalid API response: 'choices[0]' is missing.");
 
-    if (!result.choices || !result.choices[0]) {
-      throw new Error("Invalid API response: 'choices[0]' is missing.");
-    }
-
-    const messageContent = result.choices[0].message.content;
-    log(`Message content before parsing: ${messageContent}`);
-
-    const parsedContent = JSON.parse(messageContent);
+    const parsedContent = JSON.parse(result.choices[0].message.content);
     if (!parsedContent.relevant || !Array.isArray(parsedContent.relevant)) {
       throw new Error("Invalid API response: 'relevant' is missing or not an array.");
     }
@@ -128,126 +145,185 @@ ${JSON.stringify(limitedProducts.map((p) => p.name), null, 2)}`,
   }
 }
 
-// Create and setup UI
 function setupUI() {
-  const products = [];
-  document.querySelectorAll("div.s-result-item[data-component-type='s-search-result']").forEach((item) => {
-    const titleElement = item.querySelector("h2 span");
-    if (titleElement) {
-      products.push({
-        name: titleElement.textContent.trim(),
-        element: item,
-      });
-    }
-  });
-
+  const products = queryPageProducts();
   log(`Found ${products.length} products on the page.`);
 
-  const filterContainer = document.createElement('div');
-  filterContainer.style.position = "fixed";
-  filterContainer.style.top = "12%";
-  filterContainer.style.right = "10px";
-  filterContainer.style.zIndex = "1000";
-  filterContainer.style.backgroundColor = "#f9f9f9";
-  filterContainer.style.padding = "10px";
-  filterContainer.style.border = "1px solid #ccc";
-  filterContainer.style.borderRadius = "5px";
-  filterContainer.style.boxShadow = "0 4px 6px rgba(0, 0, 0, 0.1)";
+  // --- helpers ---
+  function addCondition(text) {
+    if (!text || filterConditions.includes(text)) return;
+    filterConditions.push(text);
+    localStorage.setItem('filterConditions', JSON.stringify(filterConditions));
+    localStorage.setItem('filterQuery', getSearchQuery());
 
-  const conditionInput = document.createElement('input');
-  conditionInput.type = "text";
-  conditionInput.placeholder = "Enter a condition";
-  conditionInput.style.marginBottom = "10px";
-  conditionInput.style.marginLeft = "10px";
-  conditionInput.style.width = "calc(100% - 20px)";
-  conditionInput.style.padding = "5px";
-  conditionInput.style.border = "1px solid #ccc";
-  conditionInput.style.borderRadius = "3px";
+    const pill = document.createElement('span');
+    pill.style.cssText = "display:inline-flex;align-items:center;gap:4px;padding:3px 10px;background:#e8f0fe;border:1px solid #aac4f5;border-radius:20px;font-size:13px;color:#1a56c4;";
+    pill.appendChild(document.createTextNode(text));
 
-  const addConditionButton = document.createElement('button');
-  addConditionButton.textContent = "Add Condition";
-  addConditionButton.style.marginRight = "5px";
-
-  const clearConditionsButton = document.createElement('button');
-  clearConditionsButton.textContent = "Clear Conditions";
-
-  const conditionsList = document.createElement('ul');
-  conditionsList.style.listStyle = "none";
-  conditionsList.style.padding = "0";
-  conditionsList.style.margin = "10px 0";
-  conditionsList.style.marginLeft = "10px";
-
-  const filterButton = document.createElement('button');
-  filterButton.textContent = "Apply AI Filter";
-  filterButton.style.backgroundColor = OPENAI_API_KEY ? "#0073e6" : "#cccccc";
-  filterButton.style.color = "white";
-  filterButton.style.border = "none";
-  filterButton.style.borderRadius = "5px";
-  filterButton.style.padding = "5px 10px";
-  filterButton.style.cursor = OPENAI_API_KEY ? "pointer" : "not-allowed";
-  filterButton.style.marginTop = "10px";
-  filterButton.disabled = !OPENAI_API_KEY;
-
-  const statusMessage = document.createElement('div');
-  statusMessage.style.marginTop = "10px";
-  statusMessage.style.fontSize = "12px";
-  statusMessage.style.color = "#555";
-  filterContainer.appendChild(statusMessage);
-
-  // Load previous conditions
-  filterConditions.forEach((condition) => {
-    const listItem = document.createElement('li');
-    listItem.textContent = condition;
-
-    const removeButton = document.createElement('button');
-    removeButton.textContent = "x";
-    removeButton.style.marginLeft = "10px";
-    removeButton.style.color = "red";
-    removeButton.style.border = "none";
-    removeButton.style.cursor = "pointer";
-
-    removeButton.addEventListener('click', () => {
-      filterConditions = filterConditions.filter((c) => c !== condition);
-      listItem.remove();
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = "×";
+    removeBtn.style.cssText = "border:none;background:none;color:#1a56c4;cursor:pointer;font-size:15px;line-height:1;padding:0;margin-left:2px;";
+    removeBtn.addEventListener('click', () => {
+      filterConditions = filterConditions.filter((c) => c !== text);
+      pill.remove();
       localStorage.setItem('filterConditions', JSON.stringify(filterConditions));
     });
 
-    listItem.appendChild(removeButton);
-    conditionsList.appendChild(listItem);
+    pill.appendChild(removeBtn);
+    conditionsList.appendChild(pill);
+  }
+
+  // --- container ---
+  const filterContainer = document.createElement('div');
+  filterContainer.style.cssText = `
+    position:fixed; top:70px; right:16px; z-index:9999;
+    background:#fff; border:1px solid #ddd;
+    border-radius:12px; box-shadow:0 4px 16px rgba(0,0,0,0.15);
+    width:420px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:14px; color:#111; overflow:hidden;
+  `;
+
+  // --- header bar ---
+  const header = document.createElement('div');
+  header.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#0073e6;border-radius:12px 12px 0 0;";
+  const logo = document.createElement('img');
+  logo.src = "https://i.imgur.com/d2uMms8.png";
+  logo.alt = "";
+  logo.style.cssText = "width:22px;height:22px;margin-right:8px;border-radius:4px;";
+  const titleEl = document.createElement('span');
+  titleEl.textContent = "AI Filter";
+  titleEl.style.cssText = "font-weight:700;font-size:15px;color:#fff;";
+  const statusMessage = document.createElement('span');
+  statusMessage.style.cssText = "font-size:12px;color:rgba(255,255,255,0.85);margin-left:auto;padding-left:10px;white-space:nowrap;";
+  const toggleBtn = document.createElement('button');
+  toggleBtn.textContent = '‹';
+  toggleBtn.title = "Collapse";
+  toggleBtn.style.cssText = "border:none;background:rgba(255,255,255,0.2);color:#fff;border-radius:6px;width:22px;height:22px;font-size:15px;cursor:pointer;margin-left:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;";
+
+  const headerLeft = document.createElement('div');
+  headerLeft.style.cssText = "display:flex;align-items:center;";
+  headerLeft.appendChild(logo);
+  headerLeft.appendChild(titleEl);
+  header.appendChild(headerLeft);
+  header.appendChild(statusMessage);
+  header.appendChild(toggleBtn);
+  filterContainer.appendChild(header);
+
+  // --- body ---
+  const body = document.createElement('div');
+  body.style.cssText = "padding:12px 14px;display:flex;flex-direction:column;gap:10px;";
+  filterContainer.appendChild(body);
+
+  // --- collapsed side tab ---
+  const sideTab = document.createElement('button');
+  sideTab.title = "Open filter";
+  sideTab.style.cssText = `
+    position:fixed; top:120px; right:0; z-index:9999;
+    background:#0073e6; color:#fff; border:none;
+    border-radius:8px 0 0 8px; padding:10px 6px;
+    cursor:pointer; font-size:12px; font-weight:700;
+    writing-mode:vertical-rl; text-orientation:mixed;
+    letter-spacing:1px; box-shadow:-2px 2px 8px rgba(0,0,0,0.2);
+    display:none;
+  `;
+  sideTab.textContent = "AI Filter";
+  document.body.appendChild(sideTab);
+
+  const collapsed = localStorage.getItem('filterWidgetCollapsed') === 'true';
+  if (collapsed) {
+    filterContainer.style.display = 'none';
+    sideTab.style.display = 'block';
+  }
+
+  toggleBtn.addEventListener('click', () => {
+    filterContainer.style.display = 'none';
+    sideTab.style.display = 'block';
+    localStorage.setItem('filterWidgetCollapsed', 'true');
+  });
+  sideTab.addEventListener('click', () => {
+    filterContainer.style.display = 'block';
+    sideTab.style.display = 'none';
+    localStorage.setItem('filterWidgetCollapsed', 'false');
   });
 
-  // Add functionality
+  // --- suggested filters row ---
+  const suggestionsRow = document.createElement('div');
+  suggestionsRow.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+  const suggestionsLabel = document.createElement('span');
+  suggestionsLabel.textContent = "Suggest:";
+  suggestionsLabel.style.cssText = "font-size:12px;color:#888;white-space:nowrap;";
+  const chipsContainer = document.createElement('div');
+  chipsContainer.style.cssText = "display:flex;flex-wrap:wrap;gap:5px;flex:1;";
+  const loadingChip = document.createElement('span');
+  loadingChip.textContent = "Loading…";
+  loadingChip.style.cssText = "font-size:12px;color:#bbb;";
+  chipsContainer.appendChild(loadingChip);
+  suggestionsRow.appendChild(suggestionsLabel);
+  suggestionsRow.appendChild(chipsContainer);
+  body.appendChild(suggestionsRow);
+
+  // --- active conditions as pills ---
+  const conditionsList = document.createElement('div');
+  conditionsList.style.cssText = "display:flex;flex-wrap:wrap;gap:5px;min-height:0;";
+  body.appendChild(conditionsList);
+
+  // --- input + add row ---
+  const inputRow = document.createElement('div');
+  inputRow.style.cssText = "display:flex;gap:6px;";
+  const conditionInput = document.createElement('input');
+  conditionInput.type = "text";
+  conditionInput.placeholder = "Type a filter…";
+  conditionInput.style.cssText = "flex:1;padding:7px 10px;border:1px solid #ccc;border-radius:8px;font-size:14px;outline:none;";
+  const addConditionButton = document.createElement('button');
+  addConditionButton.textContent = "Add";
+  addConditionButton.style.cssText = "padding:7px 14px;border:1px solid #ccc;border-radius:8px;font-size:14px;cursor:pointer;background:#f5f5f5;white-space:nowrap;";
+  inputRow.appendChild(conditionInput);
+  inputRow.appendChild(addConditionButton);
+  body.appendChild(inputRow);
+
+  // --- action row ---
+  const actionRow = document.createElement('div');
+  actionRow.style.cssText = "display:flex;gap:6px;";
+  const clearConditionsButton = document.createElement('button');
+  clearConditionsButton.textContent = "Clear all";
+  clearConditionsButton.style.cssText = "padding:8px 14px;border:1px solid #ccc;border-radius:8px;font-size:14px;cursor:pointer;background:#f5f5f5;";
+  const filterButton = document.createElement('button');
+  filterButton.textContent = "Apply Filter";
+  filterButton.style.cssText = `flex:1;padding:8px;border:none;border-radius:8px;font-size:14px;font-weight:700;color:#fff;cursor:${OPENAI_API_KEY ? "pointer" : "not-allowed"};background:${OPENAI_API_KEY ? "#0073e6" : "#ccc"};`;
+  filterButton.disabled = !OPENAI_API_KEY;
+  actionRow.appendChild(clearConditionsButton);
+  actionRow.appendChild(filterButton);
+  body.appendChild(actionRow);
+
+  if (!OPENAI_API_KEY) {
+    const warn = document.createElement('div');
+    warn.textContent = "Configure your OpenAI API key in the popup.";
+    warn.style.cssText = "color:#c00;font-size:13px;";
+    body.appendChild(warn);
+  }
+
+  document.body.appendChild(filterContainer);
+
+  // --- load previous conditions ---
+  // Copy saved list, reset array to empty so addCondition can properly repopulate both UI and array
+  const savedConditions = [...filterConditions];
+  filterConditions = [];
+  savedConditions.forEach((c) => addCondition(c));
+
+  // --- event listeners ---
   addConditionButton.addEventListener('click', () => {
-    const condition = conditionInput.value.trim();
-    if (condition) {
-      filterConditions.push(condition);
-      localStorage.setItem('filterConditions', JSON.stringify(filterConditions));
+    const val = conditionInput.value.trim();
+    if (val) { addCondition(val); conditionInput.value = ""; }
+  });
 
-      const listItem = document.createElement('li');
-      listItem.textContent = condition;
-
-      const removeButton = document.createElement('button');
-      removeButton.textContent = "x";
-      removeButton.style.marginLeft = "10px";
-      removeButton.style.color = "red";
-      removeButton.style.border = "none";
-      removeButton.style.cursor = "pointer";
-
-      removeButton.addEventListener('click', () => {
-        filterConditions = filterConditions.filter((c) => c !== condition);
-        listItem.remove();
-        localStorage.setItem('filterConditions', JSON.stringify(filterConditions));
-      });
-
-      listItem.appendChild(removeButton);
-      conditionsList.appendChild(listItem);
-      conditionInput.value = "";
-    }
+  conditionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const val = conditionInput.value.trim(); if (val) { addCondition(val); conditionInput.value = ""; } }
   });
 
   clearConditionsButton.addEventListener('click', () => {
     filterConditions = [];
     conditionsList.innerHTML = "";
+    statusMessage.textContent = "";
     localStorage.setItem('filterConditions', JSON.stringify(filterConditions));
   });
 
@@ -255,86 +331,81 @@ function setupUI() {
     log("Filter button clicked. Applying AI filter...");
     const combinedFilter = filterConditions.join(" and ") || DEFAULT_FILTER;
     log(`Using filter criteria: ${combinedFilter}`);
+    statusMessage.textContent = "Filtering…";
 
-    statusMessage.textContent = "Running...";
+    const currentProducts = queryPageProducts();
+    log(`Found ${currentProducts.length} products on the page.`);
 
     try {
-      const relevantProducts = await fetchRelevantProducts(products, combinedFilter, OPENAI_API_KEY);
-
+      const relevantProducts = await fetchRelevantProducts(currentProducts, combinedFilter, OPENAI_API_KEY);
       log(`Filtering complete. ${relevantProducts.length} relevant products identified.`);
 
       let keptCount = 0;
-      products.forEach((product) => {
+      currentProducts.forEach((product) => {
         if (relevantProducts.includes(product)) {
           keptCount++;
         } else {
-          product.element.style.display = "none";
+          product.element.style.setProperty("display", "none", "important");
         }
       });
 
-      document.querySelectorAll("div.s-main-slot > div").forEach((section) => {
-        const sectionHeader = section.querySelector("h2.a-size-medium-plus");
-        if (sectionHeader) {
-          const headerText = sectionHeader.textContent.trim().toLowerCase();
-          if (!headerText.startsWith("results") && !headerText.startsWith("more results")) {
-            log(`Removed non-result section with header: ${headerText}`);
-            section.remove();
-          }
-        } else {
-          const sectionClass = section.className || "";
-          if (sectionClass.includes("s-result-item")) {
-            log("Preserved a result section without a header.");
-          } else {
-            section.remove();
-            log(`Removed non-result section without header: ${sectionClass}`);
+      // Hide carousels and noise sections
+      document.querySelectorAll("[data-component-type='s-searchgrid-carousel']").forEach(el => {
+        el.style.setProperty("display", "none", "important");
+      });
+
+      const NOISE_PATTERNS = ["trending", "influencer", "related search", "customers also", "recently bought", "seen on social", "recommended based on", "browsing history"];
+      document.querySelectorAll("h2, h3").forEach(heading => {
+        const text = heading.textContent.trim().toLowerCase();
+        if (NOISE_PATTERNS.some(p => text.includes(p))) {
+          const section = heading.closest("[data-component-type]") || heading.closest(".s-result-item") || heading.parentElement?.parentElement?.parentElement;
+          if (section && !section.querySelector("[data-component-type='s-search-result']")) {
+            section.style.setProperty("display", "none", "important");
+            log(`Removed noise section: ${text}`);
           }
         }
       });
 
-      statusMessage.textContent = `Kept ${keptCount} out of ${products.length} products.`;
+      statusMessage.textContent = `${keptCount} / ${currentProducts.length} kept`;
     } catch (error) {
       log(`Error in filtering: ${error.message}`);
-      statusMessage.textContent = "An error occurred during filtering.";
+      statusMessage.textContent = "Error — check console";
     }
   });
 
-  const logoAndTitle = document.createElement('div');
-  logoAndTitle.style.display = "flex";
-  logoAndTitle.style.alignItems = "center";
-  logoAndTitle.style.marginBottom = "10px";
-
-  const logo = document.createElement('img');
-  logo.src = "https://i.imgur.com/d2uMms8.png";
-  logo.alt = "AI Filter Logo";
-  logo.style.width = "48px";
-  logo.style.height = "48px";
-  logo.style.marginRight = "10px";
-
-  const title = document.createElement('span');
-  title.textContent = "Amazon Shopping Filter";
-  title.style.fontWeight = "bold";
-  title.style.fontSize = "20px";
-
-  logoAndTitle.appendChild(logo);
-  logoAndTitle.appendChild(title);
-  filterContainer.appendChild(logoAndTitle);
-
-  filterContainer.appendChild(conditionInput);
-  filterContainer.appendChild(addConditionButton);
-  filterContainer.appendChild(clearConditionsButton);
-  filterContainer.appendChild(conditionsList);
-  filterContainer.appendChild(filterButton);
-
-  if (!OPENAI_API_KEY) {
-    const apiKeyWarning = document.createElement('div');
-    apiKeyWarning.textContent = "Please configure the OpenAI API key in the popup to enable filtering.";
-    apiKeyWarning.style.color = "red";
-    apiKeyWarning.style.marginTop = "5px";
-    apiKeyWarning.style.fontSize = "12px";
-    filterContainer.appendChild(apiKeyWarning);
+  // --- async: load suggested filter chips ---
+  if (OPENAI_API_KEY && products.length > 0) {
+    const searchQuery = getSearchQuery();
+    const productNames = products.map(p => p.name);
+    generateSuggestions(productNames, searchQuery, OPENAI_API_KEY)
+      .then((suggestions) => {
+        chipsContainer.innerHTML = "";
+        suggestions.forEach((suggestion) => {
+          const chip = document.createElement('button');
+          chip.textContent = suggestion;
+          chip.style.cssText = `
+            font-size:11px;padding:3px 7px;border-radius:12px;
+            border:1px solid #0073e6;background:white;color:#0073e6;
+            cursor:pointer;white-space:nowrap;
+          `;
+          chip.addEventListener('click', () => {
+            addCondition(suggestion);
+            chip.style.background = "#0073e6";
+            chip.style.color = "white";
+            chip.disabled = true;
+          });
+          chipsContainer.appendChild(chip);
+        });
+      })
+      .catch((err) => {
+        log(`Suggestions error: ${err.message}`);
+        chipsContainer.innerHTML = "";
+        loadingChip.textContent = "Could not load suggestions.";
+        chipsContainer.appendChild(loadingChip);
+      });
+  } else {
+    chipsContainer.innerHTML = "";
   }
-
-  document.body.appendChild(filterContainer);
 }
 
 // Main execution
